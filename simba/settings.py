@@ -92,6 +92,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'simbaapp.context_processors.version_context',
                 'simbaapp.context_processors.language_context',
+                'simbaapp.context_processors.llm_models_context',
             ],
         },
     },

@@ -626,6 +626,7 @@ def create_activity_view(request, course_id):
             "is_visible": request.POST.get('is_visible') == 'on',
             "allow_redo": request.POST.get('allow_redo') == 'on',
             "ai_model": request.POST.get('ai_model', 'gpt'),
+            "llm_model": request.POST.get('llm_model') or None,
             "files": files_data,
             "options" : {"language" : userLanguage}
         }

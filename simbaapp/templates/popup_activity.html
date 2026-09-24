@@ -81,9 +81,23 @@
                 <select name="ai_model" id="ai-model" class="form-control">
                     <option value="mistral">{% trans 'Mistral AI' %}</option>
                     <option value="gpt">{% trans 'GPT (OpenAI)' %}</option>
+                    <option value="together">{% trans 'Together AI (open-source models)' %}</option>
                 </select>
                 <small class="form-text">
                     {% trans 'Choose the AI model to power this activity. GPT supports file uploads and advanced features, while Mistral provides fast and efficient responses.' %}
+                </small>
+            </div>
+            <div class="form-group together-model-group" style="display: none;">
+                <label for="together-model">
+                    {% trans 'Together AI model' %}
+                </label>
+                <select name="llm_model" id="together-model" class="form-control">
+                    {% for model_id, model_label in TOGETHER_MODELS %}
+                    <option value="{{ model_id }}"{% if model_id == DEFAULT_TOGETHER_MODEL %} selected{% endif %}>{{ model_label }}</option>
+                    {% endfor %}
+                </select>
+                <small class="form-text">
+                    {% trans 'Open-source model used for this activity. You can change it at any time.' %}
                 </small>
             </div>
             <div class="form-group">
@@ -204,6 +218,17 @@
 </div>
 
 <script>
+    // Show the Together model dropdown only when Together AI is selected.
+    // Global so the cloned edit modals in activities.html / course_detail.html can use it too.
+    window.syncTogetherModelField = function(form) {
+        if (!form) return;
+        const aiModel = form.querySelector('#ai-model');
+        const group = form.querySelector('.together-model-group');
+        if (aiModel && group) {
+            group.style.display = aiModel.value === 'together' ? 'block' : 'none';
+        }
+    };
+
     // JavaScript to handle the modal
     document.addEventListener('DOMContentLoaded', function() {
         const modal = document.getElementById('activityModal');
@@ -423,40 +448,44 @@
         // Handle AI model selection
         function handleAiModelChange() {
             const selectedModel = aiModelSelect.value;
+            const modelNames = { mistral: 'Mistral AI', together: 'Together AI' };
+            window.syncTogetherModelField(aiModelSelect.closest('form'));
             const filesSection = document.querySelector('h3.section-title:nth-of-type(2)'); // Activity Files section
             const filesGroup = activityFiles ? activityFiles.closest('.form-group') : null;
             const filesSectionHr = filesSection ? filesSection.previousElementSibling : null; // The hr before files section
             
-            if (selectedModel === 'mistral') {
-                // Hide file upload for Mistral
+            if (selectedModel === 'mistral' || selectedModel === 'together') {
+                // Hide file upload for models without file support
                 if (filesSection) filesSection.style.display = 'none';
                 if (filesGroup) filesGroup.style.display = 'none';
                 if (filesSectionHr) filesSectionHr.style.display = 'none';
                 
-                // Only clear files if user is actively switching to Mistral (not on initial load)
+                // Only clear files if user is actively switching away from GPT (not on initial load)
                 if (aiModelSelect.dataset.initialized === 'true' && files.length > 0) {
-                    if (confirm('Switching to Mistral will remove all uploaded files. Continue?')) {
+                    if (confirm(`Switching to ${modelNames[selectedModel]} will remove all uploaded files. Continue?`)) {
                         files = [];
                         updateFilesList();
                         updateFilesHiddenField();
                     } else {
                         // User cancelled, switch back to GPT
                         aiModelSelect.value = 'gpt';
+                        window.syncTogetherModelField(aiModelSelect.closest('form'));
                         return;
                     }
                 }
                 
-                // Show notice about Mistral limitations
-                if (!document.getElementById('mistral-notice')) {
-                    const notice = document.createElement('div');
+                // Show notice about file upload limitations
+                let notice = document.getElementById('mistral-notice');
+                if (!notice) {
+                    notice = document.createElement('div');
                     notice.id = 'mistral-notice';
                     notice.className = 'model-notice';
-                    notice.innerHTML = `
-                        <i class="fas fa-info-circle"></i>
-                        <strong>Mistral AI:</strong> File uploads are not supported with Mistral. The assistant will rely on its training data and your instructions.
-                    `;
                     aiModelSelect.parentNode.appendChild(notice);
                 }
+                notice.innerHTML = `
+                    <i class="fas fa-info-circle"></i>
+                    <strong>${modelNames[selectedModel]}:</strong> File uploads are not supported with ${modelNames[selectedModel]}. The assistant will rely on its training data and your instructions.
+                `;
             } else {
                 // Show file upload for GPT
                 if (filesSection) filesSection.style.display = 'block';

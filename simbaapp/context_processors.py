@@ -4,6 +4,7 @@ Context processors for SIMBA application
 from version import get_version_info
 from django.conf import settings
 from django.utils import translation
+from .llm_models import TOGETHER_MODELS, DEFAULT_TOGETHER_MODEL
 
 def version_context(request):
     """Add version information to all templates"""
@@ -24,4 +25,11 @@ def language_context(request):
     return {
         'LANGUAGES': settings.LANGUAGES,
         'CURRENT_LANGUAGE': current_language,
-    } 
+    }
+
+def llm_models_context(request):
+    """Add the Together AI model list to all templates"""
+    return {
+        'TOGETHER_MODELS': TOGETHER_MODELS,
+        'DEFAULT_TOGETHER_MODEL': DEFAULT_TOGETHER_MODEL,
+    }

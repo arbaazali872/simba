@@ -92,6 +92,7 @@ class ActivityCreateSchema(Schema):
     is_visible: bool = True
     allow_redo: bool = True
     ai_model: str = 'gpt'
+    llm_model: Optional[str] = None
     files: List[str] = Field(default_factory=list)
     options: Optional[Dict[str, Any]] = None
     # For backward compatibility, also accept individual fields
@@ -115,6 +116,7 @@ class ActivityUpdateSchema(Schema):
     is_visible: Optional[bool] = True
     allow_redo: Optional[bool] = True
     ai_model: Optional[str] = 'gpt'
+    llm_model: Optional[str] = None
     files: Optional[List[str]] = Field(default_factory=list)
     options: Optional[Dict[str, Any]] = None
     questions: Optional[List[str]] = Field(default_factory=list)
@@ -171,6 +173,7 @@ class ActivityDetailSchema(Schema):
     is_visible: bool
     allow_redo: bool
     ai_model: str
+    llm_model: Optional[str] = None
     options: Optional[Dict[str, Any]] = None
     questions: Optional[List[str]] = None
     agent_attitude: Optional[str] = None
@@ -198,6 +201,7 @@ class ActivityDetailSchema(Schema):
             'is_visible': activity.is_visible,
             'allow_redo': activity.allow_redo,
             'ai_model': activity.ai_model,
+            'llm_model': activity.llm_model,
             'options': activity.options,
             'questions': all_options.get('questions', []),
             'agent_attitude': all_options.get('agent_attitude', 'friendly'),

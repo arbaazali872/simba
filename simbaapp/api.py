@@ -74,6 +74,7 @@ from django.shortcuts import get_object_or_404
 from http import HTTPStatus
 from . import cluster_students
 from . import openai_assistant
+from .llm_models import resolve_together_model
 from .templates import build_system_prompt
 
 # Configure logging
@@ -426,6 +427,7 @@ def create_activity_api(request, payload: ActivityCreateSchema, user_id: str):
             is_visible=payload.is_visible,
             allow_redo=payload.allow_redo,
             ai_model=payload.ai_model,
+            llm_model=resolve_together_model(payload.llm_model) if payload.ai_model == 'together' else None,
             openai_assistant_id=assistant_id,
             vector_store_id=vector_store_id,
             options=options
@@ -506,6 +508,7 @@ def create_activity_api(request, payload: ActivityCreateSchema, user_id: str):
             "is_visible": payload.is_visible,
             "allow_redo": payload.allow_redo,
             "ai_model": payload.ai_model,
+            "llm_model": activity.llm_model,
             "options": options
         }, time.time())
         
@@ -549,6 +552,10 @@ def update_activity_api(request, activity_id: str, payload: ActivityUpdateSchema
             activity.allow_redo = payload.allow_redo
         if payload.ai_model is not None:
             activity.ai_model = payload.ai_model
+        if activity.ai_model == 'together':
+            activity.llm_model = resolve_together_model(payload.llm_model or activity.llm_model)
+        else:
+            activity.llm_model = None
 
         current_options = activity.get_all_options()
         
@@ -637,7 +644,7 @@ def update_activity_api(request, activity_id: str, payload: ActivityUpdateSchema
             activity.openai_assistant_id = assistant_result['assistant_id']
             activity.vector_store_id = assistant_result['vector_store_id']
             
-        elif previous_ai_model == 'gpt' and activity.ai_model == 'mistral':
+        elif previous_ai_model == 'gpt' and activity.ai_model != 'gpt':
             if activity.openai_assistant_id:
                 try:
                     openai_assistant.delete_assistant(activity.openai_assistant_id, activity.vector_store_id)
@@ -654,6 +661,7 @@ def update_activity_api(request, activity_id: str, payload: ActivityUpdateSchema
             "description": activity.description, 
             "owner": user.id, 
             "ai_model": activity.ai_model,
+            "llm_model": activity.llm_model,
             "options": updated_options
         }, time.time())
         
@@ -1696,6 +1704,7 @@ def create_chainlit_session(request, payload: ChainlitSessionInitSchema):
             'trust_document': all_options.get('trust_document', True),
             'word_limit': all_options.get('word_limit', 0),
             'ai_model': activity.ai_model,
+            'llm_model': activity.llm_model,
             'openai_assistant_id': activity.openai_assistant_id,
             'vector_store_id': activity.vector_store_id,
             'course': {
@@ -1829,6 +1838,7 @@ def init_chainlit_session(request, payload: ChainlitSessionInitSchema):
             'trust_document': all_options.get('trust_document', True),
             'word_limit': all_options.get('word_limit', 0),
             'ai_model': activity.ai_model,
+            'llm_model': activity.llm_model,
             'openai_assistant_id': activity.openai_assistant_id,
             'vector_store_id': activity.vector_store_id,
             'course': {

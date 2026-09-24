@@ -758,6 +758,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         form.querySelector('#agent-attitude').value = activity.agent_attitude;
                         form.querySelector('#ai-model').value = activity.ai_model || 'gpt';
+                        if (activity.llm_model) {
+                            form.querySelector('#together-model').value = activity.llm_model;
+                        }
+                        window.syncTogetherModelField(form);
+                        form.querySelector('#ai-model').addEventListener('change', () => window.syncTogetherModelField(form));
                         form.querySelector('#subjects').value = activity.subjects || '';
                         form.querySelector('#restrict-to-subject').checked = activity.restrict_to_subject;
                         form.querySelector('#allow-questions').checked = activity.allow_questions;
@@ -779,6 +784,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 questions: form.querySelector('#questions-hidden').value ? JSON.parse(form.querySelector('#questions-hidden').value) : [],
                                 agent_attitude: form.querySelector('#agent-attitude').value,
                                 ai_model: form.querySelector('#ai-model').value,
+                                llm_model: form.querySelector('#together-model').value,
                                 subjects: form.querySelector('#subjects').value,
                                 restrict_to_subject: form.querySelector('#restrict-to-subject').checked,
                                 allow_questions: form.querySelector('#allow-questions').checked,

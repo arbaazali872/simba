@@ -1,7 +1,7 @@
 import os
 import django
 import django.apps
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, NotFoundError, BadRequestError
 from mistralai import Mistral
 import chainlit as cl
 import logging
@@ -13,6 +13,7 @@ import json
 from typing import Dict, Any, Optional
 from datetime import datetime
 from simbaapp.templates import build_system_prompt, get_first_message
+from simbaapp.llm_models import TOGETHER_BASE_URL, DEFAULT_TOGETHER_MODEL, resolve_together_model
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +35,8 @@ if not django.apps.apps.ready:
 
 openai_client = AsyncOpenAI()
 mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
+# Empty-string fallback stops the OpenAI SDK from sending OPENAI_API_KEY to Together
+together_client = AsyncOpenAI(api_key=os.getenv("TOGETHER_API_KEY", ""), base_url=TOGETHER_BASE_URL)
 
 # Default settings for different models
 openai_settings = {
@@ -46,6 +49,35 @@ mistral_settings = {
     "temperature": 0.7,
     "max_tokens": 1000,
 }
+
+together_settings = {
+    "temperature": 0.7,
+    # Reasoning models (e.g. gpt-oss) spend part of this budget thinking
+    "max_tokens": 4096,
+}
+
+async def together_chat(model: str, messages: list):
+    """Call Together AI. If the model has been retired, retry once with the default model.
+    Returns (response_text, model_used)."""
+    try:
+        response = await together_client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=together_settings["temperature"],
+            max_tokens=together_settings["max_tokens"],
+        )
+    except (NotFoundError, BadRequestError) as e:
+        if model == DEFAULT_TOGETHER_MODEL or "model" not in str(e).lower():
+            raise
+        logger.warning(f"Together model {model} unavailable ({e}), falling back to {DEFAULT_TOGETHER_MODEL}")
+        model = DEFAULT_TOGETHER_MODEL
+        response = await together_client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=together_settings["temperature"],
+            max_tokens=together_settings["max_tokens"],
+        )
+    return response.choices[0].message.content, model
 
 async def api_get_activity(activity_id: str):
     """Get activity data from the API."""
@@ -387,6 +419,18 @@ async def on_chat_start():
                 await api_create_message(thread_id, ai_first_response_content, "assistant", user_id, model_name=mistral_settings["model"])
                 await cl.Message(content=ai_first_response_content).send()
                 logger.info(f"Created initial Mistral message for new thread {thread_id}")
+            elif ai_model == 'together':
+                together_model = resolve_together_model(activity_data.get('llm_model'))
+                if fixedFirst :
+                    ai_first_response_content = get_first_message(activity_data, logger, language_code)
+                else :
+                    ai_first_response_content, together_model = await together_chat(
+                        together_model, [{"role": "system", "content": system_prompt_content}]
+                    )
+
+                await api_create_message(thread_id, ai_first_response_content, "assistant", user_id, model_name=together_model)
+                await cl.Message(content=ai_first_response_content).send()
+                logger.info(f"Created initial Together message ({together_model}) for new thread {thread_id}")
             else:
 
                 # openai_thread_id = cl.user_session.get("openai_thread_id")
@@ -477,6 +521,32 @@ async def on_message(message: cl.Message):
                 
             except Exception as e:
                 logger.error(f"Mistral AI Error: {e}")
+                await cl.Message(content=f"I apologize, but I'm having trouble processing your request right now. Please try again in a moment. Error: {str(e)}").send()
+
+        elif ai_model == 'together':
+            try:
+                together_model = resolve_together_model(activity_data.get('llm_model'))
+                language_code = cl.user_session.get("language", "en")
+                system_prompt_content = build_system_prompt(activity_data, logger, language_code)
+
+                messages_history_data = await api_get_messages_for_thread(thread_id)
+                together_messages = [{"role": "system", "content": system_prompt_content}]
+
+                for msg_data in messages_history_data:
+                    together_role = msg_data['role'] if msg_data['role'] in ["assistant", "user"] else "user"
+                    together_messages.append({"role": together_role, "content": msg_data['content']})
+
+                ai_response_content, together_model = await together_chat(together_model, together_messages)
+                if not ai_response_content:
+                    logger.error(f"Together model {together_model} returned an empty response")
+                    await cl.Message(content="I apologize, but I couldn't generate a response. Please try again.").send()
+                    return
+
+                await api_create_message(thread_id, ai_response_content, "assistant", user_id, model_name=together_model)
+                await cl.Message(content=ai_response_content).send()
+
+            except Exception as e:
+                logger.error(f"Together AI Error: {e}")
                 await cl.Message(content=f"I apologize, but I'm having trouble processing your request right now. Please try again in a moment. Error: {str(e)}").send()
         
         else:

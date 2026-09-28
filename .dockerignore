@@ -1,0 +1,19 @@
+# Keep the build context small. Without this file, the local Windows virtualenv
+# (env/) and the whole git history were sent to Docker on every build, which made
+# "load build context" slow, and compilemessages also crawled through env/.
+env/
+venv/
+.venv/
+.git/
+**/__pycache__/
+**/*.pyc
+.DS_Store
+.vscode/
+.idea/
+logs/
+staticfiles/
+
+# .env is deliberately NOT listed yet, even though it shouldn't end up in the image:
+# the Dockerfile runs compilemessages/collectstatic at build time, and Django won't
+# start without SECRET_KEY from .env. Excluding it needs a dummy build-time key,
+# which changes how production images are built, so it's left for a separate fix.

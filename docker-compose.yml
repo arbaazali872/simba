@@ -18,7 +18,11 @@ services:
       - simba-network
 
   web:
+    # web builds the image and chainlit reuses it. Both used to have "build: .",
+    # so the same Dockerfile was built twice in parallel: slower, and when one
+    # build got interrupted the other showed up as CANCELED with no real error.
     build: .
+    image: simba-app
     env_file:
       - .env
     environment:
@@ -28,8 +32,12 @@ services:
       - BASE_URL=http://localhost:8000
       - EMAIL=${EMAIL}
       - EMAILAPPPWD=${EMAILAPPPWD}
+    # There used to be a named volume mounted over /code here. Docker only fills
+    # a volume from the image the first time, so after that it kept serving the
+    # OLD code, and the only way to see changes was "down -v", which also wiped
+    # the database. Nothing is written under /code at runtime except the error
+    # log, so the code now simply comes from the image.
     volumes:
-      - web:/code
       - static_volume:/app/static
       - media_volume:/app/media
     entrypoint: ["sh", "/code/entrypoint.sh"]
@@ -41,7 +49,9 @@ services:
       - simba-network
   
   chainlit:
-    build: .
+    image: simba-app
+    # The image only exists locally (built by web); don't try to pull it from Docker Hub
+    pull_policy: never
     env_file:
       - .env
     environment:
@@ -51,8 +61,6 @@ services:
       - BASE_URL=http://localhost:8000
       - EMAIL=${EMAIL}
       - EMAILAPPPWD=${EMAILAPPPWD}
-    volumes:
-      - web:/code
     command: ["chainlit", "run", "chainlit_app.py", "--host", "0.0.0.0", "--port", "8500"]
     ports:
       - "8500:8500"
@@ -66,7 +74,6 @@ services:
 
 volumes:
   db:
-  web:
   static_volume:
   media_volume:
 

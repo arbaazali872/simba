@@ -35,6 +35,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'simba.settings')
 if not django.apps.apps.ready:
     django.setup()
 
+# Our calls to SIMBA's API prove they come from SIMBA itself (the API refuses anonymous callers)
+from simbaapp.api_access import internal_headers
+
 openai_client = AsyncOpenAI()
 mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 # Empty-string fallback stops the OpenAI SDK from sending OPENAI_API_KEY to Together
@@ -84,7 +87,7 @@ async def together_chat(model: str, messages: list):
 async def api_get_activity(activity_id: str):
     """Get activity data from the API."""
     try:
-        response = requests.get(f"{SIMBA_API_BASE_URL}/activities/{activity_id}")
+        response = requests.get(f"{SIMBA_API_BASE_URL}/activities/{activity_id}", headers=internal_headers())
         if response.status_code == 200:
             return response.json()
         else:
@@ -97,7 +100,7 @@ async def api_get_activity(activity_id: str):
 async def api_get_or_create_thread(activity_id: str, user_id: str):
     """Get or create a thread for the user and activity."""
     try:
-        response = requests.post(f"{SIMBA_API_BASE_URL}/threads/get-or-create", json={
+        response = requests.post(f"{SIMBA_API_BASE_URL}/threads/get-or-create", headers=internal_headers(), json={
             "activity_id": activity_id,
             "user_id": user_id
         })
@@ -124,7 +127,7 @@ async def api_create_message(thread_id: str, content: str, role: str, user_id: s
         if model_name:
             payload["model"] = model_name
             
-        response = requests.post(f"{SIMBA_API_BASE_URL}/threads/{thread_id}/messages", json=payload)
+        response = requests.post(f"{SIMBA_API_BASE_URL}/threads/{thread_id}/messages", headers=internal_headers(), json=payload)
         if response.status_code == 201:
             return response.json()
         else:
@@ -137,7 +140,7 @@ async def api_create_message(thread_id: str, content: str, role: str, user_id: s
 async def api_get_messages_for_thread(thread_id: str):
     async with httpx.AsyncClient() as http_client:
         try:
-            response = await http_client.get(f"{SIMBA_API_BASE_URL}/threads/{thread_id}/messages")
+            response = await http_client.get(f"{SIMBA_API_BASE_URL}/threads/{thread_id}/messages", headers=internal_headers())
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
@@ -174,7 +177,7 @@ async def api_get_session_by_id(session_id: str):
     """Get this chat's own session from the API; None if it doesn't exist or has expired."""
     async with httpx.AsyncClient() as http_client:
         try:
-            response = await http_client.get(f"{SIMBA_API_BASE_URL}/chainlit/session/{session_id}")
+            response = await http_client.get(f"{SIMBA_API_BASE_URL}/chainlit/session/{session_id}", headers=internal_headers())
             if response.status_code == 200:
                 return response.json()
             logger.warning(f"Session {session_id} not found or expired: {response.status_code}")
@@ -187,7 +190,7 @@ async def api_get_next_session():
     """Get the next pending session from the API queue"""
     async with httpx.AsyncClient() as http_client:
         try:
-            response = await http_client.get(f"{SIMBA_API_BASE_URL}/chainlit/next-session")
+            response = await http_client.get(f"{SIMBA_API_BASE_URL}/chainlit/next-session", headers=internal_headers())
             if response.status_code == 200:
                 logger.info(f"Response : {response.json()}")
                 return response.json()

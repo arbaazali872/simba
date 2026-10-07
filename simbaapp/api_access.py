@@ -54,6 +54,16 @@ The API's existing owner checks ("only the course owner can delete it") then app
 changing those addresses. Ids that say who something is ABOUT (student_id, target_user_id: the student a teacher
 looks at, the user an admin edits) are not checked here; who may see or change whom is for later steps.
 Nothing changes for people using SIMBA: the pages always send the logged-in user's own id.
+
+Step 5: the admin area of the API and the API documentation are for admins only.
+
+/api/admin/... (user lists, statistics, deleting users, courses and activities) is used only by the admin pages,
+which already send non-admins away. Each admin address also checks "is this user an admin?" itself, and since
+step 4 that user can only be the logged-in one. This step adds a second lock in front of the whole admin area
+(ADMIN_ONLY), so an admin address added later without its own check is still protected. It also closes the API's
+documentation pages (/api/docs, /api/openapi.json): a complete, clickable map of every API address, which any
+logged-in user could open before. Refused with 403 for anyone who is not an admin.
+Nothing changes for people using SIMBA: only admins use the admin pages, and nobody's work needs the docs.
 """
 import hashlib
 import hmac
@@ -86,6 +96,13 @@ CHAT_PROGRAM_ONLY = [re.compile(pattern) for pattern in (
     r'^/api/chainlit/init-session$',         # older way to start a session (no longer used by anything)
     r'^/api/threads/get-or-create$',         # find or create a student's conversation
     r'^/api/threads/[^/]+/messages$',        # read or save the messages of a conversation
+)]
+
+# Admins only (step 5): the admin area of the API and the API documentation
+ADMIN_ONLY = [re.compile(pattern) for pattern in (
+    r'^/api/admin/',                         # everything under /api/admin/
+    r'^/api/docs',                           # the clickable API documentation page
+    r'^/api/openapi\.json$',                 # the same documentation, as data
 )]
 
 # Parameters that say WHO IS ACTING; they must be the logged-in user's own id (step 4).
@@ -193,4 +210,6 @@ class ApiAccessMiddleware:
         own_id = str(user.id).lower()
         if any(acting_id != own_id for acting_id in _acting_user_ids(request, path)):
             return _deny(403, 'You can only act as yourself.')   # 4. an id that is not the logged-in user's
+        if any(p.match(path) for p in ADMIN_ONLY) and not user.is_admin:
+            return _deny(403, 'Admin access required.')          # 5. admin area or docs, not an admin
         return None

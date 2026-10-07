@@ -64,6 +64,23 @@ step 4 that user can only be the logged-in one. This step adds a second lock in 
 documentation pages (/api/docs, /api/openapi.json): a complete, clickable map of every API address, which any
 logged-in user could open before. Refused with 403 for anyone who is not an admin.
 Nothing changes for people using SIMBA: only admins use the admin pages, and nobody's work needs the docs.
+
+Step 6: a course's data only for the people in that course.
+
+SIMBA has no "teacher" or "student" account type: you teach the courses you created (or were added to as teacher)
+and study in the courses you joined. Before, any logged-in account could ask the dashboard addresses for ANY
+course's data by its id: e.g. a student could type /api/dashboard/raw_messages/?course_id=<their course> and
+download every classmate's full conversation, or trigger the AI summary of any activity (an OpenAI call each time).
+Now, when a request names a specific course or activity:
+  - the teacher dashboard's data (export, word cloud, student groups, statistics, AI summaries): only someone who
+    TEACHES that course (its creator, a co-teacher, or an admin);
+  - a student's own statistics (/api/dashboard/student/<own id>/, "My Stats" in the student view of the
+    dashboard): anyone IN that course;
+  - the course's participant list (/api/courses/<id>/participants; students have a "Show participants" button
+    for their courses): anyone IN that course.
+Otherwise refused (403). "All courses" (no specific course) is not covered here; see the next steps.
+Nothing changes for people using SIMBA: teachers' dashboard menus only list their own courses, and students only
+ask for their own statistics and their own courses' participants.
 """
 import hashlib
 import hmac
@@ -74,7 +91,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 
-from .models import User
+from .models import Activity, Course, CourseEnrollment, User
 
 INTERNAL_HEADER = 'X-Simba-Internal-Key'
 
@@ -104,6 +121,10 @@ ADMIN_ONLY = [re.compile(pattern) for pattern in (
     r'^/api/docs',                           # the clickable API documentation page
     r'^/api/openapi\.json$',                 # the same documentation, as data
 )]
+
+# A course's data (step 6)
+OWN_STATS = re.compile(r'^/api/dashboard/student/([^/]+)$')         # a student's statistics, by student id
+PARTICIPANTS = re.compile(r'^/api/courses/([^/]+)/participants$')   # a course's participant list
 
 # Parameters that say WHO IS ACTING; they must be the logged-in user's own id (step 4).
 ACTING_USER_PARAMS = (
@@ -153,6 +174,54 @@ def _by_id(queryset, value):
         return queryset.filter(id=value).first()
     except (ValueError, ValidationError):
         return None
+
+
+def teaches(user, course):
+    """Teaches this course: its creator (owner), a co-teacher (enrolled with role 'teacher'), or an admin."""
+    return (user.is_admin or course.owner_id == user.id
+            or CourseEnrollment.objects.filter(user=user, course=course, role='teacher').exists())
+
+
+def is_in_course(user, course):
+    """Teaches it (see teaches) or is enrolled in it, as a student or otherwise."""
+    return teaches(user, course) or CourseEnrollment.objects.filter(user=user, course=course).exists()
+
+
+def _course_data_refusal(request, path, user):
+    """
+    Step 6: None if this user may get the data this request asks for about a specific course or activity,
+    otherwise the refusal. Requests that name no specific course ("all") are left to the next steps.
+    """
+    stats_match = OWN_STATS.match(path)
+    own_stats = bool(stats_match) and stats_match.group(1).lower() == str(user.id).lower()
+    allowed = is_in_course if own_stats else teaches      # your own statistics: being in the course is enough
+    who = 'the people in this course' if own_stats else 'the teachers of this course'
+
+    courses = []
+    if path.startswith('/api/dashboard/'):
+        course_id = request.GET.get('course_id')
+        if course_id and course_id != 'all':
+            course = _by_id(Course.objects, course_id)
+            if course is None:
+                return _deny(404, 'Course not found.')
+            courses.append(course)
+        activity_id = request.GET.get('activity_id')
+        if activity_id and activity_id != 'all':
+            activity = _by_id(Activity.objects.select_related('course'), activity_id)
+            if activity is None:
+                return _deny(404, 'Activity not found.')
+            courses.append(activity.course)
+    participants_match = PARTICIPANTS.match(path)
+    if participants_match:
+        course = _by_id(Course.objects, participants_match.group(1))
+        if course is None:
+            return _deny(404, 'Course not found.')
+        allowed, who = is_in_course, 'the people in this course'
+        courses.append(course)
+
+    if any(not allowed(user, course) for course in courses):
+        return _deny(403, f'Only {who} can see this.')
+    return None
 
 
 def _acting_user_ids(request, path):
@@ -212,4 +281,4 @@ class ApiAccessMiddleware:
             return _deny(403, 'You can only act as yourself.')   # 4. an id that is not the logged-in user's
         if any(p.match(path) for p in ADMIN_ONLY) and not user.is_admin:
             return _deny(403, 'Admin access required.')          # 5. admin area or docs, not an admin
-        return None
+        return _course_data_refusal(request, path, user)         # 6. a specific course's data

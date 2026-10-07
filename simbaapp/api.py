@@ -67,6 +67,7 @@ from .eventTracking import (
 )
 from .email_utils import send_email_verification, send_password_reset_email
 from .services import authenticate_user
+from .api_access import session_user, courses_taught_by, messages_taught_by
 import time
 import logging
 
@@ -957,7 +958,13 @@ def get_student_data(request, student_id: str, course_id: str = "all", activity_
     """
     try:
         student = User.objects.get(id=student_id)
-        
+
+        # The requester is the logged-in user, never a parameter: without this, a call without
+        # requesting_user_id counted as the student viewing themselves, for any student. Admins see everything.
+        viewer = session_user(request)
+        if viewer is not None:
+            requesting_user_id = None if viewer.is_admin else str(viewer.id)
+
         # Determine if this is a self-query or teacher querying student
         is_self_query = requesting_user_id is None or requesting_user_id == student_id
         
@@ -968,10 +975,13 @@ def get_student_data(request, student_id: str, course_id: str = "all", activity_
             if course_id != "all":
                 course = Course.objects.get(id=course_id)
                 # Check if requesting user is owner or teacher in this course
-                is_owner = course.owner_id == requesting_user_id
+                # owner_id is a UUID object and requesting_user_id is text: compared directly they are never equal,
+                # so course creators were never recognised as owners. This check only runs since the requester comes
+                # from the login (above); without str() creators would be refused their own students.
+                is_owner = str(course.owner_id) == requesting_user_id
                 enrollment = CourseEnrollment.objects.filter(user=requesting_user, course=course).first()
                 has_permission = is_owner or (enrollment and enrollment.role == 'teacher')
-                
+
                 if not has_permission:
                     return {"error": "Permission denied. You can only view data for courses where you are owner or teacher."}
             else:
@@ -1012,6 +1022,12 @@ def get_student_data(request, student_id: str, course_id: str = "all", activity_
                 enrollments__role='student'
             )
             
+            if not is_self_query:
+                # A teacher only sees the student's activity in the courses this teacher teaches
+                taught = courses_taught_by(requesting_user)
+                if taught is not None:
+                    student_courses = student_courses.filter(id__in=taught)
+
             if not student_courses.exists():
                 return {"error": "Student is not enrolled in any courses as a student."}
             
@@ -1137,14 +1153,23 @@ def get_student_data(request, student_id: str, course_id: str = "all", activity_
 def get_conversation_stats(request, course_id: str = "all", requesting_user_id: str = None):
     """Get detailed conversation statistics for analysis."""
     try:
+        # The requester is the logged-in user, never a parameter: without requesting_user_id this used to return
+        # the whole site's data. Admins (requesting_user_id None) still see everything.
+        viewer = session_user(request)
+        if viewer is not None:
+            requesting_user_id = None if viewer.is_admin else str(viewer.id)
+
         # Validate permissions if requesting_user_id is provided
         if requesting_user_id:
             requesting_user = User.objects.get(id=requesting_user_id)
-            
+
             if course_id != "all":
                 course = Course.objects.get(id=course_id)
                 # Check if requesting user is owner or teacher in this course
-                is_owner = course.owner_id == requesting_user_id
+                # owner_id is a UUID object and requesting_user_id is text: compared directly they are never equal,
+                # so course creators were never recognised as owners. This check only runs since the requester comes
+                # from the login (above); without str() creators would be refused their own students.
+                is_owner = str(course.owner_id) == requesting_user_id
                 enrollment = CourseEnrollment.objects.filter(user=requesting_user, course=course).first()
                 has_permission = is_owner or (enrollment and enrollment.role == 'teacher')
                 
@@ -1318,14 +1343,15 @@ def generate_student_analysis(request, student_id: str, activity_id: str = "all"
         
         if activity_id != "all":
             activity = Activity.objects.get(id=activity_id)
-            messages = Message.objects.filter(
+            messages = messages_taught_by(request).filter(
                 thread__user=student,
                 thread__activity=activity,
                 role='user'
             ).order_by('timestamp')
             context = f"for activity '{activity.title}'"
         else:
-            messages = Message.objects.filter(
+            # Only the student's messages in courses the caller teaches (all of them for an admin)
+            messages = messages_taught_by(request).filter(
                 thread__user=student,
                 role='user'
             ).order_by('timestamp')
@@ -1384,7 +1410,8 @@ def get_word_frequencies(request, course_id: str = "all", min_word_length: int =
                 thread__activity__course=course
             ).select_related('thread__user', 'thread__activity')
         else:
-            messages = Message.objects.all().select_related('thread__user', 'thread__activity')
+            # "All courses" = all courses the caller teaches (all of them for an admin)
+            messages = messages_taught_by(request).select_related('thread__user', 'thread__activity')
         
         print(f"DEBUG: Retrieved {messages.count()} messages for word frequency analysis")
         
@@ -1429,7 +1456,8 @@ def get_student_clusters(request, course_id: str = "all", n_clusters: int = 3):
                 role='user'
             ).select_related('thread__user', 'thread__activity')
         else:
-            messages = Message.objects.filter(
+            # "All courses" = all courses the caller teaches (all of them for an admin)
+            messages = messages_taught_by(request).filter(
                 role='user'
             ).select_related('thread__user', 'thread__activity')
         
@@ -1481,7 +1509,8 @@ def get_raw_messages(request, course_id: str = "all", activity_id: str = "all"):
                 thread__activity__course=course
             ).select_related('thread__user', 'thread__activity', 'thread__activity__course').order_by('-timestamp')
         else:
-            messages_query = Message.objects.all().select_related('thread__user', 'thread__activity', 'thread__activity__course').order_by('-timestamp')
+            # "All courses" = all courses the caller teaches (all of them for an admin)
+            messages_query = messages_taught_by(request).select_related('thread__user', 'thread__activity', 'thread__activity__course').order_by('-timestamp')
         
         if activity_id != "all":
             activity = Activity.objects.get(id=activity_id)

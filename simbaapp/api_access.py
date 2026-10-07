@@ -81,6 +81,21 @@ Now, when a request names a specific course or activity:
 Otherwise refused (403). "All courses" (no specific course) is not covered here; see the next steps.
 Nothing changes for people using SIMBA: teachers' dashboard menus only list their own courses, and students only
 ask for their own statistics and their own courses' participants.
+
+Steps 7 + 8: "All courses" means the courses you teach.
+
+When a request names NO specific course, the dashboard's choice "All Courses", the API used the whole site:
+  - statistics table and a student's details (step 7): these ask "who is asking?" through a parameter
+    (requesting_user_id) that the teacher dashboard never sends, and without it the code returned the whole
+    site's statistics, or treated the caller as the student looking at themselves;
+  - word cloud, student groups, export, AI analysis of a student (step 8): these started from every message on
+    the site.
+Since any account can create a course and so open the teacher dashboard, any account could read everyone's
+conversations this way. Now (in api.py) "who is asking" comes from the login, and "all courses" is narrowed to
+the courses the caller teaches (courses_taught_by / messages_taught_by below); admins still see everything.
+A student looking at their own statistics is unchanged.
+THIS IS VISIBLE: a teacher choosing "All Courses" now sees only the students and conversations of their own
+courses (same screens, smaller numbers). Decided with the supervisors.
 """
 import hashlib
 import hmac
@@ -89,9 +104,10 @@ import re
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.http import JsonResponse
 
-from .models import Activity, Course, CourseEnrollment, User
+from .models import Activity, Course, CourseEnrollment, Message, User
 
 INTERNAL_HEADER = 'X-Simba-Internal-Key'
 
@@ -185,6 +201,26 @@ def teaches(user, course):
 def is_in_course(user, course):
     """Teaches it (see teaches) or is enrolled in it, as a student or otherwise."""
     return teaches(user, course) or CourseEnrollment.objects.filter(user=user, course=course).exists()
+
+
+def courses_taught_by(user):
+    """Steps 7 + 8: the courses whose data this user may see; None means all of them (admin)."""
+    if user.is_admin:
+        return None
+    return Course.objects.filter(Q(owner=user) | Q(enrollments__user=user, enrollments__role='teacher')).distinct()
+
+
+def messages_taught_by(request):
+    """
+    Steps 7 + 8: the messages the caller may analyse when no specific course is chosen ("All Courses"):
+    all of them for an admin or for SIMBA itself (internal key), otherwise only those in the courses the logged-in
+    user teaches. The dashboard addresses in api.py start from this instead of from every message on the site.
+    """
+    user = session_user(request)
+    if user is None:
+        return Message.objects.all() if is_internal(request) else Message.objects.none()
+    courses = courses_taught_by(user)
+    return Message.objects.all() if courses is None else Message.objects.filter(thread__activity__course__in=courses)
 
 
 def _course_data_refusal(request, path, user):

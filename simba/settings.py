@@ -67,6 +67,10 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Checks every request to /api/ before any API code runs: SIMBA's internal key, a way in (login, registration,
+    # password reset), or a logged-in user; anything else is refused. Must come after SessionMiddleware (above),
+    # which provides the login. See simbaapp/api_access.py.
+    'simbaapp.api_access.ApiAccessMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'simba.middleware.ErrorEmailMiddleware',

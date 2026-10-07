@@ -17,14 +17,41 @@ one). The web and chat containers both read SECRET_KEY from the same .env, so bo
 there is nothing new to configure. The key is only sent from SIMBA's server to SIMBA's server; browsers never
 receive it.
 
-This step only ADDS the key to SIMBA's own calls. Nothing checks it yet, so nothing changes for anyone.
+Step 2: the API refuses callers who are not logged in.
+
+Before, the API answered anyone on the internet, logged in or not: e.g. GET /api/dashboard/raw_messages/ returned
+every student's conversations to a visitor without an account (confirmed on the live site on Oct 5, 2026).
+ApiAccessMiddleware (switched on in simba/settings.py) now looks at every request to /api/ BEFORE any API code runs,
+and lets it through only if:
+  1. it carries SIMBA's internal key (step 1): the pages' and the chat program's own calls;
+  2. it is one of the ways in (PUBLIC_PATHS: login, registration, email verification, password reset), which by
+     nature are used before logging in;
+  3. someone is logged in: the same login the pages use (request.session['user_id']), which the browser sends with
+     every request automatically.
+Anything else gets 401 "Please log in." Pages (/login/, /courses/, ...) are not affected: only /api/ is checked.
+For people using SIMBA normally nothing changes: they are logged in, and the pages and the chat carry the key.
+What this step does NOT do yet: a logged-in account can still reach everything (later steps).
 """
 import hashlib
 import hmac
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.http import JsonResponse
+
+from .models import User
 
 INTERNAL_HEADER = 'X-Simba-Internal-Key'
+
+# The ways in: they must work before anyone is logged in. Every other /api/ address needs a login (or the key).
+PUBLIC_PATHS = {
+    '/api/auth/register',
+    '/api/auth/login',
+    '/api/auth/verify-email',
+    '/api/auth/resend-verification',
+    '/api/auth/password-reset-request',
+    '/api/auth/password-reset',
+}
 
 
 def internal_api_key():
@@ -43,3 +70,55 @@ def is_internal(request):
     # compare_digest takes the same time whether the first or the last character differs,
     # so the key cannot be guessed character by character from response times
     return bool(sent) and hmac.compare_digest(sent, internal_api_key())
+
+
+def session_user(request):
+    """
+    The user logged in on this request, or None. Uses the same login as the pages: at login, views.login_view
+    stores the user's id in request.session['user_id'].
+    """
+    if not hasattr(request, '_simba_session_user'):   # look it up once per request
+        user_id = request.session.get('user_id')
+        request._simba_session_user = _by_id(User.objects, user_id) if user_id else None
+    return request._simba_session_user
+
+
+def _by_id(queryset, value):
+    """The object with this id, or None; also None for a malformed id, instead of a server error."""
+    try:
+        return queryset.filter(id=value).first()
+    except (ValueError, ValidationError):
+        return None
+
+
+def _deny(status, message):
+    """The refusal sent back, in the same JSON shape as the API's own error messages."""
+    return JsonResponse({'message': message}, status=status)
+
+
+class ApiAccessMiddleware:
+    """
+    Checks every request to /api/ before any API code runs (see the explanation at the top of this file).
+    Django calls __call__ for every request, pages included; only /api/ addresses are checked.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith('/api/'):
+            refusal = self.check(request)
+            if refusal is not None:
+                return refusal                      # the API code never runs
+        return self.get_response(request)          # carry on as before
+
+    def check(self, request):
+        """None = let the request through; otherwise the refusal to send back."""
+        path = request.path.rstrip('/')            # '/api/auth/login/' and '/api/auth/login' are the same address
+        if is_internal(request):                   # 1. SIMBA itself (pages' and chat program's own calls)
+            return None
+        if path in PUBLIC_PATHS:                   # 2. a way in
+            return None
+        if session_user(request) is None:          # 3. nobody logged in
+            return _deny(401, 'Please log in.')
+        return None

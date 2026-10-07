@@ -13,6 +13,9 @@ from django.utils import timezone
 from django.utils.translation import activate
 from http import HTTPStatus
 from .services import authenticate_user
+# Server-side calls to our own API carry SIMBA's internal key, so the API can tell they come from SIMBA itself
+# (see api_access.py: the API will refuse callers who are neither logged in nor SIMBA)
+from .api_access import internal_headers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,7 +73,7 @@ def register_view(request):
         api_url = request.build_absolute_uri(reverse('api-1.0.0:register_user'))
         
         try:
-            response = requests.post(api_url, json={
+            response = requests.post(api_url, headers=internal_headers(), json={
                 'username': username,
                 'email': email,
                 'password': password,
@@ -172,7 +175,7 @@ def resend_verification_view(request):
         api_url = request.build_absolute_uri(reverse('api-1.0.0:resend_verification_email'))
         
         try:
-            response = requests.post(api_url, json={'email': email})
+            response = requests.post(api_url, headers=internal_headers(), json={'email': email})
             response_data = response.json()
             
             if response.status_code == 200:
@@ -199,7 +202,7 @@ def password_reset_request_view(request):
         api_url = request.build_absolute_uri(reverse('api-1.0.0:request_password_reset'))
         
         try:
-            response = requests.post(api_url, json={'email': email})
+            response = requests.post(api_url, headers=internal_headers(), json={'email': email})
             response_data = response.json()
             
             if response.status_code == 200:
@@ -241,7 +244,7 @@ def password_reset_view(request, token):
             api_url = request.build_absolute_uri(reverse('api-1.0.0:reset_password'))
             
             try:
-                response = requests.post(api_url, json={
+                response = requests.post(api_url, headers=internal_headers(), json={
                     'token': token,
                     'new_password': new_password,
                     'new_password_confirm': new_password_confirm
@@ -327,7 +330,7 @@ def chainlit_view(request):
             session_data['thread_id'] = str(thread_id)
         
         try:
-            response = requests.post(request.build_absolute_uri('/api/chainlit/create-session'), json=session_data)
+            response = requests.post(request.build_absolute_uri('/api/chainlit/create-session'), headers=internal_headers(), json=session_data)
             response.raise_for_status()
             session_data = response.json()
             
@@ -439,7 +442,7 @@ def create_course_view(request):
         api_url = request.build_absolute_uri(reverse('api-1.0.0:create_course_api') + f"?user_id={user_id}")
 
         try:
-            response = requests.post(api_url, json={
+            response = requests.post(api_url, headers=internal_headers(), json={
                 'title': title,
                 'description': description
             })
@@ -621,7 +624,7 @@ def create_activity_view(request, course_id):
         api_url = request.build_absolute_uri(reverse('api-1.0.0:create_activity_api') + f"?user_id={user_id}")
 
         try:
-            response = requests.post(api_url, json=activity_data)
+            response = requests.post(api_url, headers=internal_headers(), json=activity_data)
             response_data = response.json()
 
             if response.status_code == 201:
@@ -1452,7 +1455,7 @@ def profile_view(request):
         api_url = request.build_absolute_uri(reverse('api-1.0.0:update_user_profile', args=[user_id]))
         
         try:
-            response = requests.put(api_url, json=profile_data)
+            response = requests.put(api_url, headers=internal_headers(), json=profile_data)
             
             if response.status_code == 200:
                 user_data = response.json()
@@ -1507,7 +1510,7 @@ def admin_dashboard_view(request):
     # Get basic stats for the dashboard
     try:
         api_url = request.build_absolute_uri(f'/api/admin/stats?user_id={user_id}')
-        response = requests.get(api_url)
+        response = requests.get(api_url, headers=internal_headers())
         
         if response.status_code == 200:
             stats = response.json()
@@ -1554,7 +1557,7 @@ def admin_users_view(request):
         
         try:
             api_url = request.build_absolute_uri(f'/api/admin/users?user_id={user_id}')
-            response = requests.post(api_url, json={
+            response = requests.post(api_url, headers=internal_headers(), json={
                 'username': username,
                 'email': email,
                 'password': password,
@@ -1573,7 +1576,7 @@ def admin_users_view(request):
     # Get all users
     try:
         api_url = request.build_absolute_uri(f'/api/admin/users?user_id={user_id}')
-        response = requests.get(api_url)
+        response = requests.get(api_url, headers=internal_headers())
         
         if response.status_code == 200:
             users_data = response.json()
@@ -1612,7 +1615,7 @@ def admin_courses_view(request):
     # Get all courses
     try:
         api_url = request.build_absolute_uri(f'/api/admin/courses?user_id={user_id}')
-        response = requests.get(api_url)
+        response = requests.get(api_url, headers=internal_headers())
         
         if response.status_code == 200:
             courses_data = response.json()
@@ -1651,7 +1654,7 @@ def admin_activities_view(request):
     # Get all activities
     try:
         api_url = request.build_absolute_uri(f'/api/admin/activities?user_id={user_id}')
-        response = requests.get(api_url)
+        response = requests.get(api_url, headers=internal_headers())
         
         if response.status_code == 200:
             activities_data = response.json()
@@ -1714,7 +1717,7 @@ def admin_delete_user(request, user_id_to_delete):
     
     try:
         api_url = request.build_absolute_uri(f'/api/admin/users/{user_id_to_delete}?user_id={user_id}')
-        response = requests.delete(api_url)
+        response = requests.delete(api_url, headers=internal_headers())
         
         if response.status_code == 204:
             messages.success(request, _("User deleted successfully."))
@@ -1748,7 +1751,7 @@ def admin_delete_course(request, course_id):
     
     try:
         api_url = request.build_absolute_uri(f'/api/admin/courses/{course_id}?user_id={user_id}')
-        response = requests.delete(api_url)
+        response = requests.delete(api_url, headers=internal_headers())
         
         if response.status_code == 204:
             messages.success(request, _("Course deleted successfully."))
@@ -1782,7 +1785,7 @@ def admin_delete_activity(request, activity_id):
     
     try:
         api_url = request.build_absolute_uri(f'/api/admin/activities/{activity_id}?user_id={user_id}')
-        response = requests.delete(api_url)
+        response = requests.delete(api_url, headers=internal_headers())
         
         if response.status_code == 204:
             messages.success(request, _("Activity deleted successfully."))

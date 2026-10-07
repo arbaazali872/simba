@@ -41,9 +41,23 @@ them from the server, with the internal key. Before, any browser could use them 
 write messages into it given its number, or take chat sessions waiting for other students.
 Now a request to these addresses WITHOUT the internal key is refused (403), even from a logged-in user.
 Nothing changes for people using SIMBA: their chat window goes through the chat program, which has the key.
+
+Step 4: you can only act as yourself.
+
+Many API addresses are told WHO is acting through a parameter: e.g. deleting a course is
+DELETE /api/courses/<course>?user_id=<who is deleting>, and the API then checks "is <who is deleting> the owner?".
+The API believed whatever id it was sent, so a logged-in student could send a teacher's id and act as that
+teacher: delete their course, change their activities, start a chat in their name, use admin functions with an
+admin's id. Now every id that says "who is acting" (ACTING_USER_PARAMS, ACTING_USER_IN_PATH, and "user_id" in the
+request body) must be the logged-in user's own; otherwise the request is refused (403).
+The API's existing owner checks ("only the course owner can delete it") then apply to the real user, without
+changing those addresses. Ids that say who something is ABOUT (student_id, target_user_id: the student a teacher
+looks at, the user an admin edits) are not checked here; who may see or change whom is for later steps.
+Nothing changes for people using SIMBA: the pages always send the logged-in user's own id.
 """
 import hashlib
 import hmac
+import json
 import re
 
 from django.conf import settings
@@ -72,6 +86,18 @@ CHAT_PROGRAM_ONLY = [re.compile(pattern) for pattern in (
     r'^/api/chainlit/init-session$',         # older way to start a session (no longer used by anything)
     r'^/api/threads/get-or-create$',         # find or create a student's conversation
     r'^/api/threads/[^/]+/messages$',        # read or save the messages of a conversation
+)]
+
+# Parameters that say WHO IS ACTING; they must be the logged-in user's own id (step 4).
+ACTING_USER_PARAMS = (
+    'user_id',               # courses, activities, attempts, files, visibility, all admin functions
+    'current_user_id',       # removing a student from a course
+    'requesting_user_id',    # dashboard: who is asking for a student's data or the statistics
+)
+# The same, when the id is part of the address itself
+ACTING_USER_IN_PATH = [re.compile(pattern) for pattern in (
+    r'^/api/users/([^/]+)$',                          # changing your profile
+    r'^/api/threads/user-attempts/[^/]+/([^/]+)$',    # your attempts at an activity
 )]
 
 
@@ -112,6 +138,24 @@ def _by_id(queryset, value):
         return None
 
 
+def _acting_user_ids(request, path):
+    """Every id in this request that says who is acting: in the parameters, in the address, or in the body."""
+    ids = [request.GET.get(name) for name in ACTING_USER_PARAMS]
+    for pattern in ACTING_USER_IN_PATH:
+        match = pattern.match(path)
+        if match:
+            ids.append(match.group(1))
+    # Starting a chat sends {"activity_id": ..., "user_id": <for whom>, ...} in the body
+    if 'application/json' in request.content_type and request.body:
+        try:
+            body = json.loads(request.body)
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            ids.append(body.get('user_id'))
+    return [str(i).lower() for i in ids if i]
+
+
 def _deny(status, message):
     """The refusal sent back, in the same JSON shape as the API's own error messages."""
     return JsonResponse({'message': message}, status=status)
@@ -143,6 +187,10 @@ class ApiAccessMiddleware:
         if any(p.match(path) for p in CHAT_PROGRAM_ONLY):
             # the chat program's addresses, but without the key (step 1 let the chat program through already)
             return _deny(403, 'This address is only for SIMBA itself.')
-        if session_user(request) is None:          # 3. nobody logged in
+        user = session_user(request)
+        if user is None:                           # 3. nobody logged in
             return _deny(401, 'Please log in.')
+        own_id = str(user.id).lower()
+        if any(acting_id != own_id for acting_id in _acting_user_ids(request, path)):
+            return _deny(403, 'You can only act as yourself.')   # 4. an id that is not the logged-in user's
         return None

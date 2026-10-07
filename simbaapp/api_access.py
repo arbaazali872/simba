@@ -31,9 +31,20 @@ and lets it through only if:
 Anything else gets 401 "Please log in." Pages (/login/, /courses/, ...) are not affected: only /api/ is checked.
 For people using SIMBA normally nothing changes: they are logged in, and the pages and the chat carry the key.
 What this step does NOT do yet: a logged-in account can still reach everything (later steps).
+
+Step 3: the chat program's own addresses are closed to browsers.
+
+Some API addresses exist only for the chat program (chainlit_app.py), see CHAT_PROGRAM_ONLY: collecting the chat
+session a student just started, finding or creating the student's conversation, and loading and saving its
+messages. No page ever calls them (checked: no JavaScript in the templates uses them); the chat program calls
+them from the server, with the internal key. Before, any browser could use them too: read any conversation and
+write messages into it given its number, or take chat sessions waiting for other students.
+Now a request to these addresses WITHOUT the internal key is refused (403), even from a logged-in user.
+Nothing changes for people using SIMBA: their chat window goes through the chat program, which has the key.
 """
 import hashlib
 import hmac
+import re
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -52,6 +63,16 @@ PUBLIC_PATHS = {
     '/api/auth/password-reset-request',
     '/api/auth/password-reset',
 }
+
+# Used only by the chat program (chainlit_app.py), never by a page: refused without the internal key.
+# Written as patterns because some contain a number in the middle ([^/]+ = "any one path segment").
+CHAT_PROGRAM_ONLY = [re.compile(pattern) for pattern in (
+    r'^/api/chainlit/next-session$',         # take the oldest waiting chat session (fallback for old pages)
+    r'^/api/chainlit/session/[^/]+$',        # take a chat session by its number
+    r'^/api/chainlit/init-session$',         # older way to start a session (no longer used by anything)
+    r'^/api/threads/get-or-create$',         # find or create a student's conversation
+    r'^/api/threads/[^/]+/messages$',        # read or save the messages of a conversation
+)]
 
 
 def internal_api_key():
@@ -119,6 +140,9 @@ class ApiAccessMiddleware:
             return None
         if path in PUBLIC_PATHS:                   # 2. a way in
             return None
+        if any(p.match(path) for p in CHAT_PROGRAM_ONLY):
+            # the chat program's addresses, but without the key (step 1 let the chat program through already)
+            return _deny(403, 'This address is only for SIMBA itself.')
         if session_user(request) is None:          # 3. nobody logged in
             return _deny(401, 'Please log in.')
         return None
